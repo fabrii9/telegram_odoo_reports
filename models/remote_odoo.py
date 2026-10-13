@@ -4,6 +4,7 @@
 Es una clase Python común (no un modelo de Odoo): no guarda nada, solo consulta.
 """
 import logging
+import time
 import xmlrpc.client
 from datetime import datetime, timedelta
 
@@ -93,6 +94,21 @@ class RemoteOdoo(object):
         self.models = None
 
     # ---------------- conexión ----------------
+    RETRY_CODES = (429, 502, 503, 504)
+
+    def _retry(self, fn, tries=4):
+        """Reintenta con espera creciente si el Odoo remoto responde 429 (rate limit) o 5xx transitorio."""
+        for attempt in range(tries):
+            try:
+                return fn()
+            except xmlrpc.client.ProtocolError as e:
+                if e.errcode in self.RETRY_CODES and attempt < tries - 1:
+                    wait = 2 * (attempt + 1)
+                    _logger.warning("Odoo remoto respondió %s; reintento en %ss", e.errcode, wait)
+                    time.sleep(wait)
+                    continue
+                raise
+
     def connect(self):
         if self.uid:
             return self.uid
@@ -100,7 +116,7 @@ class RemoteOdoo(object):
             raise RemoteOdooError("Faltan datos de conexión del Odoo remoto (URL, base, usuario o clave).")
         try:
             common = _proxy("%s/xmlrpc/2/common" % self.url, self.timeout)
-            uid = common.authenticate(self.db, self.user, self.pwd, {})
+            uid = self._retry(lambda: common.authenticate(self.db, self.user, self.pwd, {}))
         except Exception as e:  # red, SSL, protocolo, base inexistente
             raise RemoteOdooError("No se pudo conectar a %s: %s" % (self.url, e))
         if not uid:
@@ -118,7 +134,8 @@ class RemoteOdoo(object):
     def _execute_kw(self, model, method, args=None, kwargs=None):
         self.connect()
         try:
-            return self.models.execute_kw(self.db, self.uid, self.pwd, model, method, args or [], kwargs or {})
+            return self._retry(lambda: self.models.execute_kw(
+                self.db, self.uid, self.pwd, model, method, args or [], kwargs or {}))
         except RemoteOdooError:
             raise
         except Exception as e:
@@ -157,14 +174,16 @@ class RemoteOdoo(object):
         return round(sum(r.get("amount_signed") or 0.0 for r in recs), 2)
 
     # ---------------- facturación por líneas ----------------
-    def _dom_fact_lines(self, fecha):
+    def _dom_fact_base(self):
         return [
             ("parent_state", "=", "posted"),
             ("move_id.move_type", "in", ["out_invoice", "out_refund"]),
             ("display_type", "not in", ["line_section", "line_note"]),
             ("product_id", "not ilike", self.patt_prod_cheque),
-            ("move_id.invoice_date", "=", fecha),
         ]
+
+    def _dom_fact_lines(self, fecha):
+        return self._dom_fact_base() + [("move_id.invoice_date", "=", fecha)]
 
     @staticmethod
     def _move_id(value):
@@ -285,26 +304,52 @@ class RemoteOdoo(object):
         """Facturación de lunes a viernes de la semana de `fecha` (sáb/dom -> la semana que terminó).
 
         Devuelve [(nombre_dia, 'dd/mm', total)] siempre con los 5 días; los que todavía no
-        ocurrieron (posteriores a hoy) llevan total None. Usa el mismo cálculo que /facturacion.
+        ocurrieron (posteriores a hoy) llevan total None. Mismo criterio que /facturacion
+        (mismo dominio y NC en negativo), pero con solo 2 consultas para toda la semana
+        (líneas del rango + fecha de factura de cada comprobante) para no gatillar el rate limit.
         """
         ref = datetime.strptime(fecha or self.today(), "%Y-%m-%d").date()
         hoy = datetime.strptime(self.today(), "%Y-%m-%d").date()
         lunes = ref - timedelta(days=ref.weekday())
+        ultimo = min(lunes + timedelta(days=4), hoy)
+        por_dia = {}
+        if ultimo >= lunes:
+            dom = self._dom_fact_base() + [
+                ("move_id.invoice_date", ">=", lunes.strftime("%Y-%m-%d")),
+                ("move_id.invoice_date", "<=", ultimo.strftime("%Y-%m-%d")),
+            ]
+            recs = self._search_read_all("account.move.line", dom, ["price_subtotal", "move_id", "is_refund"])
+            por_move = {}
+            for r in recs:
+                mv = self._move_id(r.get("move_id"))
+                if not mv:
+                    continue
+                monto = float(r.get("price_subtotal") or 0.0)
+                por_move[mv] = por_move.get(mv, 0.0) + (-monto if r.get("is_refund") else monto)
+            if por_move:
+                moves = self._execute_kw("account.move", "read", [list(por_move)], {"fields": ["id", "invoice_date"]})
+                for m in moves:
+                    if m.get("invoice_date"):
+                        por_dia[m["invoice_date"]] = por_dia.get(m["invoice_date"], 0.0) + por_move.get(m["id"], 0.0)
         rows = []
         for i, nombre in enumerate(DIAS_SEMANA):
             dia = lunes + timedelta(days=i)
-            total = None if dia > hoy else self.facturacion_stats(dia.strftime("%Y-%m-%d"))[0]
+            total = None if dia > hoy else round(por_dia.get(dia.strftime("%Y-%m-%d"), 0.0), 2)
             rows.append((nombre, dia.strftime("%d/%m"), total))
         return rows
 
     def informe_semanal_parts(self, fecha=None):
         """(texto del informe del día, bloque 'Facturación 5 días' monoespaciado)."""
         fecha = fecha or self.today()
-        return self.msg_informe(fecha), format_semana(self.facturacion_semana(fecha))
+        rows = self.facturacion_semana(fecha)
+        dm = datetime.strptime(fecha, "%Y-%m-%d").strftime("%d/%m")
+        fact = next((r[2] for r in rows if r[1] == dm and r[2] is not None), None)  # reutiliza el total del día
+        return self.msg_informe(fecha, fact_total=fact), format_semana(rows)
 
-    def msg_informe(self, fecha=None):
+    def msg_informe(self, fecha=None, fact_total=None):
         fecha = fecha or self.today()
-        fact_total, _n, _l = self.facturacion_stats(fecha)
+        if fact_total is None:
+            fact_total, _n, _l = self.facturacion_stats(fecha)
         return ("Informe %s\nFacturación: %s\nLiquidez: %s\nCheques: %s" % (
             fecha, fmt_money(fact_total), fmt_money(self.total_liquidez(fecha)),
             fmt_money(self.total_cheques(fecha))))

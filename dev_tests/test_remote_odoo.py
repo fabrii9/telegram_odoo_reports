@@ -12,9 +12,18 @@ def execute_kw(db, uid, pwd, model, method, args, kw):
         return [{"amount_signed": 5000.0}, {"amount_signed": -200.0}]
     if model == "account.move.line":
         mult = 1
+        rng = {}
         for d in args[0]:
-            if d[0] == "move_id.invoice_date":
+            if d[0] == "move_id.invoice_date" and d[1] == "=":
                 mult = int(d[2][-2:])   # el monto depende del día del mes: 05 -> x5
+            elif d[0] == "move_id.invoice_date":
+                rng[d[1]] = int(d[2][-2:])
+        if rng:   # consulta de semana: por cada día, una factura (1500*d) y una NC (300*d)
+            out = []
+            for day in range(rng[">="], rng["<="] + 1):
+                out.append({"price_subtotal": 1500.0 * day, "move_id": [day * 10 + 1, "F"], "is_refund": False})
+                out.append({"price_subtotal": 300.0 * day, "move_id": [day * 10 + 2, "NC"], "is_refund": True})
+            return out
         return [
             {"price_subtotal": 1000.0 * mult, "move_id": [1, "FA-1"], "is_refund": False, "l10n_latam_document_type_id": [1, "Factura A"]},
             {"price_subtotal": 500.0 * mult,  "move_id": [1, "FA-1"], "is_refund": False, "l10n_latam_document_type_id": [1, "Factura A"]},
@@ -22,6 +31,8 @@ def execute_kw(db, uid, pwd, model, method, args, kw):
             {"price_subtotal": 70.0 * mult,   "move_id": [3, "FB-1"], "is_refund": False, "l10n_latam_document_type_id": False},
         ]
     if model == "account.move" and method == "read":
+        if args[0] and args[0][0] > 10:   # lectura de invoice_date de la consulta semanal
+            return [{"id": i, "invoice_date": "2026-10-%02d" % (i // 10)} for i in args[0]]
         return [{"id": 1, "name": "FA-1"}, {"id": 2, "name": "NC-1"}, {"id": 3, "name": "FB-1"}]
     raise Exception("modelo inesperado " + model)
 
@@ -63,15 +74,33 @@ def nombres(rows): return [x[0] for x in rows]
 SEM = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
 rows = r.facturacion_semana("2026-10-09")           # viernes de una semana ya cerrada
 assert nombres(rows) == SEM and [x[1] for x in rows] == ["05/10", "06/10", "07/10", "08/10", "09/10"]
-assert [x[2] for x in rows] == [1270.0 * d for d in (5, 6, 7, 8, 9)], rows
+assert [x[2] for x in rows] == [1200.0 * d for d in (5, 6, 7, 8, 9)], rows
 assert r.facturacion_semana("2026-10-10") == rows and r.facturacion_semana("2026-10-11") == rows   # sáb/dom -> misma semana
 assert r.facturacion_semana("2026-10-05") == rows                                                  # lunes
 cur = r.facturacion_semana("2026-10-13")             # semana en curso (hoy martes): mié-vie todavía no ocurrieron
 assert nombres(cur) == SEM and [x[2] is None for x in cur] == [False, False, True, True, True], cur
-assert cur[1][2] == 1270.0 * 13 and cur[0][2] == 1270.0 * 12
+assert cur[1][2] == 1200.0 * 13 and cur[0][2] == 1200.0 * 12
+calls.clear(); r.uid = r.uid  # ya autenticado
 informe, bloque = r.informe_semanal_parts("2026-10-09")
+assert len(calls) == 4, calls          # líneas de la semana + fechas de facturas + liquidez + cheques
+assert "Facturación: 10.800,00" in informe, informe   # reutiliza el total de la semana (1200*9)
 print(informe); print(); print("Facturación 5 días:"); print(bloque); print()
 assert bloque.splitlines()[0].startswith("Lunes     05/10") and bloque.splitlines()[-1].lstrip().startswith("Total")
 print(ro.format_semana(cur)); print()
 assert "—" in ro.format_semana(cur)
+
+# ---- reintento ante 429 ----
+import xmlrpc.client as xc
+ro.time.sleep = lambda s: None
+class Flaky:
+    def __init__(s, n): s.n = n; s.calls = 0
+    def execute_kw(s, *a):
+        s.calls += 1
+        if s.calls <= s.n: raise xc.ProtocolError("x", 429, "Too Many Requests", {})
+        return [{"amount": 1.0}]
+r2 = ro.RemoteOdoo(url, "odoo", "u", "ok"); r2.connect()
+r2.models = Flaky(2); assert r2.total_cheques("2026-10-13") == 1.0 and r2.models.calls == 3     # 2 x 429 y luego OK
+r2.models = Flaky(99)
+try: r2.total_cheques("2026-10-13"); raise SystemExit("debía fallar")
+except ro.RemoteOdooError as e: print("429 persistente ->", str(e)[:100]); assert r2.models.calls == 4
 print("ASSERTS OK")
