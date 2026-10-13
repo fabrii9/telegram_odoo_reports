@@ -21,6 +21,7 @@ class TelegramReportSchedule(models.Model):
                         help="Hora local (zona horaria del bot). Ej: 6:30, 16:10, 23:58.")
     report = fields.Selection([
         ("informe", "Informe (facturación + liquidez + cheques)"),
+        ("informe_semanal", "Informe + facturación 5 días (lunes a viernes)"),
         ("facturacion", "Facturación"),
         ("facturacion_detalle", "Facturación por tipo"),
         ("liquidez", "Liquidez"),

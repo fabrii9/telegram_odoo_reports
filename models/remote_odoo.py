@@ -5,7 +5,7 @@ Es una clase Python común (no un modelo de Odoo): no guarda nada, solo consulta
 """
 import logging
 import xmlrpc.client
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -19,6 +19,38 @@ class RemoteOdooError(Exception):
 def fmt_money(n):
     s = format(n or 0.0, ",.2f")
     return s.replace(",", "x").replace(".", ",").replace("x", ".")
+
+
+DIAS_SEMANA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]
+BAR_WIDTH = 10
+
+
+def _bar(value, vmax, width=BAR_WIDTH):
+    """Barra de texto proporcional (medios bloques). Valores <= 0 no dibujan barra."""
+    if not value or value <= 0 or not vmax or vmax <= 0:
+        return ""
+    halves = max(1, int(round(value / vmax * width * 2)))
+    full, half = divmod(halves, 2)
+    return "█" * full + ("▌" if half else "")
+
+
+def format_semana(rows):
+    """rows: [(nombre_dia, 'dd/mm', total o None)] -> bloque de texto monoespaciado con barras.
+
+    total None = día que todavía no ocurrió (se muestra '—').
+    """
+    vmax = max([r[2] for r in rows if r[2] is not None] or [0])
+    montos = [fmt_money(r[2]) if r[2] is not None else "—" for r in rows]
+    suma = sum(r[2] for r in rows if r[2] is not None)
+    total_txt = fmt_money(suma)
+    w = max(len(m) for m in montos + [total_txt])
+    name_w = max(len(r[0]) for r in rows)
+    lines = []
+    for (nombre, fecha, total), monto in zip(rows, montos):
+        bar = _bar(total, vmax) if total is not None else ""
+        lines.append("%s %s  %s  %s" % (nombre.ljust(name_w), fecha, bar.ljust(BAR_WIDTH), monto.rjust(w)))
+    lines.append("%s  %s  %s" % ("Total".ljust(name_w + 6), " " * BAR_WIDTH, total_txt.rjust(w)))
+    return "\n".join(lines)
 
 
 class _TimeoutMixin(object):
@@ -248,6 +280,27 @@ class RemoteOdoo(object):
             if len(detalle[tipo]) > limite_por_tipo:
                 lineas.append("  … (+%s más)" % (len(detalle[tipo]) - limite_por_tipo))
         return "\n".join(lineas)
+
+    def facturacion_semana(self, fecha=None):
+        """Facturación de lunes a viernes de la semana de `fecha` (sáb/dom -> la semana que terminó).
+
+        Devuelve [(nombre_dia, 'dd/mm', total)] siempre con los 5 días; los que todavía no
+        ocurrieron (posteriores a hoy) llevan total None. Usa el mismo cálculo que /facturacion.
+        """
+        ref = datetime.strptime(fecha or self.today(), "%Y-%m-%d").date()
+        hoy = datetime.strptime(self.today(), "%Y-%m-%d").date()
+        lunes = ref - timedelta(days=ref.weekday())
+        rows = []
+        for i, nombre in enumerate(DIAS_SEMANA):
+            dia = lunes + timedelta(days=i)
+            total = None if dia > hoy else self.facturacion_stats(dia.strftime("%Y-%m-%d"))[0]
+            rows.append((nombre, dia.strftime("%d/%m"), total))
+        return rows
+
+    def informe_semanal_parts(self, fecha=None):
+        """(texto del informe del día, bloque 'Facturación 5 días' monoespaciado)."""
+        fecha = fecha or self.today()
+        return self.msg_informe(fecha), format_semana(self.facturacion_semana(fecha))
 
     def msg_informe(self, fecha=None):
         fecha = fecha or self.today()

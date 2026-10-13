@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import html
 import logging
 import secrets
 from datetime import datetime
@@ -23,7 +24,8 @@ HELP_TEXT = (
     "/facturacion [YYYY-MM-DD]\n"
     "/facturacion_detalle [YYYY-MM-DD]\n"
     "/facturacion_listado [YYYY-MM-DD] [LIMITE]\n"
-    "/informe [YYYY-MM-DD]"
+    "/informe [YYYY-MM-DD]\n"
+    "/semana [YYYY-MM-DD]"
 )
 
 # comando -> texto para el mensaje de error
@@ -34,7 +36,11 @@ COMMANDS = {
     "facturacion_detalle": "detalle de facturación",
     "facturacion_listado": "listado de facturación",
     "informe": "informe",
+    "semana": "informe semanal",
 }
+
+# Reportes que se envían con parse_mode HTML (llevan un bloque monoespaciado <pre>)
+HTML_REPORTS = {"semana", "informe_semanal"}
 
 
 def _parse_date(token):
@@ -158,10 +164,13 @@ class TelegramReportBot(models.Model):
             raise UserError(_("Telegram respondió con error: %s") % self._scrub(data.get("description")))
         return data.get("result")
 
-    def send_text(self, chat_id, text):
+    def send_text(self, chat_id, text, as_html=False):
         self.ensure_one()
         for chunk in _split_text(text):
-            self._api("sendMessage", {"chat_id": chat_id, "text": chunk})
+            payload = {"chat_id": chat_id, "text": chunk}
+            if as_html:
+                payload["parse_mode"] = "HTML"
+            self._api("sendMessage", payload)
 
     # ------------------------------------------------------------------
     # Comandos
@@ -171,7 +180,7 @@ class TelegramReportBot(models.Model):
         self.ensure_one()
         if cmd in ("start", "help"):
             return HELP_TEXT
-        if cmd not in COMMANDS:
+        if cmd not in COMMANDS and cmd not in HTML_REPORTS:
             return None
         parts = (args_text or "").split()
         fecha = _parse_date(parts[0]) if parts else None
@@ -192,6 +201,9 @@ class TelegramReportBot(models.Model):
             return remote.msg_facturacion_por_tipo(fecha)
         if cmd == "facturacion_listado":
             return remote.msg_facturacion_listado_por_tipo(fecha, limite_por_tipo=limite)
+        if cmd in HTML_REPORTS:
+            informe, bloque = remote.informe_semanal_parts(fecha)
+            return "%s\n\nFacturación 5 días:\n<pre>%s</pre>" % (html.escape(informe), html.escape(bloque))
         return remote.msg_informe(fecha)
 
     def _handle_update(self, update):
@@ -236,7 +248,7 @@ class TelegramReportBot(models.Model):
         if reply is None:
             return
         try:
-            self.send_text(chat_id, reply)
+            self.send_text(chat_id, reply, as_html=(state == "ok" and cmd in HTML_REPORTS))
         except UserError as e:
             state = "error"
             reply = "No se pudo enviar la respuesta: %s" % e
@@ -296,9 +308,10 @@ class TelegramReportBot(models.Model):
                       command=schedule.report, state="error")
             return False
         ok = True
+        as_html = schedule.report in HTML_REPORTS
         for chat in chats:
             try:
-                self.send_text(chat.chat_id, text)
+                self.send_text(chat.chat_id, text, as_html=as_html)
                 self._log("schedule", text, chat_id=chat.chat_id, command=schedule.report)
             except UserError as e:
                 ok = False

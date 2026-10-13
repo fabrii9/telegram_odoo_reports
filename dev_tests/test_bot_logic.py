@@ -40,17 +40,18 @@ class Chats(list):
     def filtered(s, f): return Chats(c for c in s if f(c))
 class FakeRemote:
     def msg_informe(s, f=None): return "INFORME %s" % f
+    def informe_semanal_parts(s, f=None): return ("INFORME <%s>" % f, "Lunes 05/10 & x")
     def msg_cheques(s, f=None): raise bot_mod.RemoteOdooError("remoto caído")
     def msg_facturacion_listado_por_tipo(s, f=None, limite_por_tipo=20): return "LISTADO %s lim=%s" % (f, limite_por_tipo)
 b = Bot.__new__(Bot)
 b.token = "123456:SECRETTOKEN"; b.bot_username = "printemps_bot"; b.reply_unauthorized = True
 b.chat_ids = Chats([Chat("-100"), Chat("-200", q=False)])
 sent, logs = [], []
-b.send_text = lambda cid, t: sent.append((cid, t)); b._log = lambda kind, msg, **k: logs.append((kind, k.get("state"), k.get("command")))
+b.send_text = lambda cid, t, as_html=False: sent.append((cid, t, as_html)) or None; b._log = lambda kind, msg, **k: logs.append((kind, k.get("state"), k.get("command")))
 b._remote = lambda: FakeRemote(); b.ensure_one = lambda: None
 def upd(text, cid): return {"message": {"text": text, "chat": {"id": int(cid)}}}
-b._handle_update(upd("/informe 2026-10-01", -100)); assert sent[-1] == ("-100", "INFORME 2026-10-01"), sent
-b._handle_update(upd("/informe", -100)); assert sent[-1] == ("-100", "INFORME None")
+b._handle_update(upd("/informe 2026-10-01", -100)); assert sent[-1][:2] == ("-100", "INFORME 2026-10-01"), sent
+b._handle_update(upd("/informe", -100)); assert sent[-1][:2] == ("-100", "INFORME None")
 b._handle_update(upd("/informe@printemps_bot 2026-10-02", -100)); assert sent[-1][1] == "INFORME 2026-10-02"
 n = len(sent); b._handle_update(upd("/informe@otro_bot", -100)); assert len(sent) == n   # otro bot: ignora
 b._handle_update(upd("/loquesea", -100)); assert len(sent) == n                             # desconocido: ignora
@@ -58,6 +59,9 @@ b._handle_update(upd("hola", -100)); assert len(sent) == n                      
 b._handle_update(upd("/facturacion_listado 2026-10-03 5", -100)); assert sent[-1][1] == "LISTADO 2026-10-03 lim=5", sent[-1]
 b._handle_update(upd("/facturacion_listado 2026-10-03 abc", -100)); assert sent[-1][1] == "LISTADO 2026-10-03 lim=20"
 b._handle_update(upd("/cheques", -100)); assert sent[-1][1].startswith("Error consultando cheques: remoto caído"), sent[-1]
+b._handle_update(upd("/semana 2026-10-09", -100)); m = sent[-1]
+assert m[2] is True and m[1] == "INFORME &lt;2026-10-09&gt;\n\nFacturación 5 días:\n<pre>Lunes 05/10 &amp; x</pre>", m   # HTML escapado + <pre>
+b._handle_update(upd("/informe", -100)); assert sent[-1][2] is False                                          # el resto va en texto plano
 b._handle_update(upd("/help", -100)); assert sent[-1][1].startswith("Comandos:")
 b._handle_update(upd("/informe", -999)); assert "no está autorizado" in sent[-1][1] and "-999" in sent[-1][1]   # chat desconocido
 b._handle_update(upd("/informe", -200)); assert "no está autorizado" in sent[-1][1]                             # chat sin can_query
