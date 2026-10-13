@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="telegram_report_bot_view_tree" model="ir.ui.view">
+        <field name="name">telegram.report.bot.tree</field>
+        <field name="model">telegram.report.bot</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="name"/>
+                <field name="bot_username"/>
+                <field name="remote_url"/>
+                <field name="mode"/>
+                <field name="active" invisible="1"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="telegram_report_bot_view_form" model="ir.ui.view">
+        <field name="name">telegram.report.bot.form</field>
+        <field name="model">telegram.report.bot</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_test_telegram" type="object" string="Probar Telegram"/>
+                    <button name="action_test_remote" type="object" string="Probar Odoo remoto"/>
+                    <button name="action_send_report_now" type="object" string="Enviar informe ahora"
+                            class="btn-primary" confirm="Se enviará el informe de hoy a todos los chats con 'Recibe reportes'. ¿Continuar?"/>
+                    <button name="action_use_polling" type="object" string="Usar polling"
+                            attrs="{'invisible': [('mode', '=', 'polling')]}"/>
+                    <button name="action_set_webhook" type="object" string="Usar webhook"
+                            attrs="{'invisible': [('mode', '=', 'webhook')]}"/>
+                </header>
+                <sheet>
+                    <widget name="web_ribbon" title="Archivado" bg_color="bg-danger"
+                            attrs="{'invisible': [('active', '=', True)]}"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1><field name="name" placeholder="Ej: Reportes Printemps"/></h1>
+                    </div>
+                    <field name="active" invisible="1"/>
+                    <notebook>
+                        <page string="Telegram" name="telegram">
+                            <group>
+                                <group string="Bot">
+                                    <field name="token" password="True"/>
+                                    <field name="bot_username"/>
+                                    <field name="reply_unauthorized"/>
+                                </group>
+                                <group string="Recepción de mensajes">
+                                    <field name="mode"/>
+                                    <field name="last_update_id"/>
+                                    <field name="webhook_secret" password="True"
+                                           attrs="{'invisible': [('mode', '!=', 'webhook')]}"/>
+                                    <field name="last_error" attrs="{'invisible': [('last_error', '=', False)]}"/>
+                                    <button name="action_reset_offset" type="object" string="Reiniciar lectura"
+                                            class="btn-link" attrs="{'invisible': [('mode', '!=', 'polling')]}"/>
+                                </group>
+                            </group>
+                        </page>
+                        <page string="Odoo remoto" name="remote">
+                            <group>
+                                <group string="Conexión (XML-RPC)">
+                                    <field name="remote_url" placeholder="https://miempresa.odoo.com"/>
+                                    <field name="remote_db"/>
+                                    <field name="remote_user"/>
+                                    <field name="remote_password" password="True"/>
+                                </group>
+                                <group string="Parámetros de los reportes">
+                                    <field name="tz"/>
+                                    <field name="pattern_cheq"/>
+                                    <field name="pattern_ret"/>
+                                    <field name="pattern_prod_cheque"/>
+                                </group>
+                            </group>
+                        </page>
+                        <page string="Chats" name="chats">
+                            <p class="text-muted">
+                                Solo estos chats pueden consultar al bot. Para descubrir el ID de un grupo,
+                                escribí un comando (ej. /help) desde ese chat: el bot responde con el ID.
+                            </p>
+                            <field name="chat_ids">
+                                <tree editable="bottom">
+                                    <field name="name"/>
+                                    <field name="chat_id"/>
+                                    <field name="can_query"/>
+                                    <field name="receive_scheduled"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Envíos programados" name="schedules">
+                            <field name="schedule_ids">
+                                <tree editable="bottom">
+                                    <field name="name"/>
+                                    <field name="hour" widget="float_time"/>
+                                    <field name="report"/>
+                                    <field name="mon"/>
+                                    <field name="tue"/>
+                                    <field name="wed"/>
+                                    <field name="thu"/>
+                                    <field name="fri"/>
+                                    <field name="sat"/>
+                                    <field name="sun"/>
+                                    <field name="grace_minutes"/>
+                                    <field name="last_run" readonly="1"/>
+                                    <field name="active"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Registros" name="logs">
+                            <field name="log_ids" readonly="1">
+                                <tree>
+                                    <field name="create_date"/>
+                                    <field name="kind"/>
+                                    <field name="state"/>
+                                    <field name="chat_id"/>
+                                    <field name="command"/>
+                                    <field name="message"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="telegram_report_bot_action" model="ir.actions.act_window">
+        <field name="name">Bots de Telegram</field>
+        <field name="res_model">telegram.report.bot</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+</odoo>

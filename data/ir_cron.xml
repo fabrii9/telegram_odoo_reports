@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="ir_cron_telegram_report_poll" model="ir.cron">
+        <field name="name">Telegram Reportes: leer mensajes (polling)</field>
+        <field name="model_id" ref="model_telegram_report_bot"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_poll()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="doall" eval="False"/>
+    </record>
+
+    <record id="ir_cron_telegram_report_scheduled" model="ir.cron">
+        <field name="name">Telegram Reportes: envíos programados</field>
+        <field name="model_id" ref="model_telegram_report_bot"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_scheduled()</field>
+        <field name="user_id" ref="base.user_root"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="doall" eval="False"/>
+    </record>
+</odoo>

@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_telegram_report_bot_system,telegram.report.bot system,model_telegram_report_bot,base.group_system,1,1,1,1
+access_telegram_report_chat_system,telegram.report.chat system,model_telegram_report_chat,base.group_system,1,1,1,1
+access_telegram_report_schedule_system,telegram.report.schedule system,model_telegram_report_schedule,base.group_system,1,1,1,1
+access_telegram_report_log_system,telegram.report.log system,model_telegram_report_log,base.group_system,1,1,1,1

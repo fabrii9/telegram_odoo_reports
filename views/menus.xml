@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_telegram_report_root" name="Telegram Reportes"
+              groups="base.group_system" sequence="95"/>
+    <menuitem id="menu_telegram_report_bots" name="Bots" parent="menu_telegram_report_root"
+              action="telegram_report_bot_action" sequence="10"/>
+    <menuitem id="menu_telegram_report_logs" name="Registros" parent="menu_telegram_report_root"
+              action="telegram_report_log_action" sequence="20"/>
+</odoo>
